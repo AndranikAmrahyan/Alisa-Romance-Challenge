@@ -6,8 +6,8 @@ load_dotenv()
 # Telegram Bot Token
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Groq API (бесплатный AI)
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# OpenRouter API Key (ЛУЧШИЙ ВАРИАНТ!)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 # Render настройки
 RENDER_APP_URL = os.getenv("RENDER_APP_URL", "")
@@ -18,7 +18,7 @@ DB_NAME = "bot_data.db"
 
 # Персонаж бота
 BOT_NAME = "Алиса"
-BOT_AGE = "взрослая"  # Никогда не говорит точный возраст
+BOT_AGE = "взрослая"
 BOT_COUNTRY = "Россия"
 BOT_CITY = "Москвы"
 
@@ -36,25 +36,18 @@ START_TRIGGERS = [
 ]
 
 # Тайминги игры (в секундах)
-MIN_GAME_DURATION = 300   # 5 минут (чтобы AI успел узнать контекст)
+MIN_GAME_DURATION = 300
 
-# MAX_GAME_DURATION в зависимости от сложности
-MAX_GAME_DURATION_HARD = 3600    # 1 час для сложного режима
-MAX_GAME_DURATION_MEDIUM = 1800  # 30 минут для среднего режима
-MAX_GAME_DURATION_EASY = 900     # 15 минут для легкого режима
+MAX_GAME_DURATION_HARD = 3600
+MAX_GAME_DURATION_MEDIUM = 1800
+MAX_GAME_DURATION_EASY = 900
 
-CHECK_INTERVAL = 300      # Проверка каждые 5 минут
+CHECK_INTERVAL = 300
 
-# Функция для получения MAX_GAME_DURATION в зависимости от сложности
 def get_max_game_duration(difficulty: str) -> int:
     if difficulty == "easy":
         return MAX_GAME_DURATION_EASY
     elif difficulty == "medium":
         return MAX_GAME_DURATION_MEDIUM
-    else:  # hard
+    else:
         return MAX_GAME_DURATION_HARD
-
-# Настройки AI
-AI_MODEL = "llama-3.3-70b-versatile"  # Groq бесплатная модель
-AI_MAX_TOKENS = 500
-AI_TEMPERATURE = 0.95  # Чуть повысил для "живости"
