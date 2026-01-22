@@ -8,11 +8,16 @@ logger = logging.getLogger(__name__)
 
 class AIHandler:
     def __init__(self):
-        self.api_key = config.GROQ_API_KEY
-        self.model = config.AI_MODEL
-        self.api_url = "https://api.groq.com/openai/v1/chat/completions"
+        self.api_key = config.OPENROUTER_API_KEY
+        # Используем бесплатную модель от Meta
+        self.model = "meta-llama/llama-3.1-8b-instruct:free"
+        # Альтернативы (тоже бесплатные):
+        # "google/gemma-2-9b-it:free"
+        # "mistralai/mistral-7b-instruct:free"
         
-        # --- ПРОМПТ ДЛЯ СЛОЖНОСТИ "HARD" ---
+        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
+        
+        # Промпты (такие же)
         self.prompt_hard = f"""Ты — {config.BOT_NAME}, {config.BOT_AGE} девушка из города {config.BOT_CITY}, {config.BOT_COUNTRY}. 
 
 ТВОЯ ЛИЧНОСТЬ:
@@ -66,7 +71,6 @@ class AIHandler:
 - Пиши естественно, как живой человек в переписке
 - Если сообщение ОЧЕНЬ скучное - можешь ответить коротко и ехидно, или проигнорировать"""
 
-        # --- ПРОМПТ ДЛЯ СЛОЖНОСТИ "MEDIUM" (Более мягкий, с правилами прощения) ---
         self.prompt_medium = f"""Ты — {config.BOT_NAME}, {config.BOT_AGE} девушка из города {config.BOT_CITY}, {config.BOT_COUNTRY}. 
 
 ТВОЯ ЛИЧНОСТЬ:
@@ -107,7 +111,6 @@ class AIHandler:
 - Пиши естественно, как живой человек в переписке
 """
 
-        # --- ПРОМПТ ДЛЯ СЛОЖНОСТИ "EASY" (Легкий режим) ---
         self.prompt_easy = f"""Ты — {config.BOT_NAME}, {config.BOT_AGE} девушка из города {config.BOT_CITY}, {config.BOT_COUNTRY}. 
 
 ТВОЯ ЛИЧНОСТЬ:
@@ -150,9 +153,9 @@ class AIHandler:
     async def get_response(self, message: str, conversation_history: List[Dict], 
                           user_name: str, user_messages_count: int,
                           all_participants: List[Dict], difficulty: str = "hard") -> str:
-        """Получить ответ от AI"""
+        """Получить ответ от AI через OpenRouter"""
         try:
-            # Выбираем промпт в зависимости от сложности
+            # Выбираем промпт
             if difficulty == "easy":
                 current_system_prompt = self.prompt_easy
             elif difficulty == "medium":
@@ -163,28 +166,26 @@ class AIHandler:
             # Формируем контекст
             messages = [{"role": "system", "content": current_system_prompt}]
             
-            # Добавляем краткую историю (последние 20 сообщений)
-            for msg in conversation_history[-20:]:
+            # Добавляем историю (последние 15 сообщений для экономии токенов)
+            for msg in conversation_history[-15:]:
                 messages.append({
                     "role": msg["role"],
                     "content": msg["content"]
                 })
             
-            # Добавляем информацию об участниках в контекст
+            # Информация об участниках
             if all_participants:
-                participants_info = f"\n\n[УЧАСТНИКИ ИГРЫ: {len(all_participants)} человек(а). "
-                for p in all_participants[:5]:  # Топ 5 активных
-                    participants_info += f"{p['first_name']} (@{p['username']}) - {p['message_count']} сообщ., "
+                participants_info = f"\n\n[УЧАСТНИКИ: {len(all_participants)} чел. "
+                for p in all_participants[:3]:  # Только топ-3
+                    participants_info += f"{p['first_name']} - {p['message_count']} сообщ., "
                 participants_info += "]"
-                
-                # Добавляем к последнему системному сообщению
                 messages[0]["content"] += participants_info
             
-            # Добавляем текущее сообщение
-            user_context = f"{user_name} (написал(а) уже {user_messages_count} сообщений): {message}"
+            # Текущее сообщение
+            user_context = f"{user_name} (сообщение #{user_messages_count}): {message}"
             messages.append({"role": "user", "content": user_context})
             
-            # Запрос к Groq API
+            # Запрос к OpenRouter
             async with aiohttp.ClientSession() as session:
                 headers = {
                     "Authorization": f"Bearer {self.api_key}",
@@ -194,10 +195,9 @@ class AIHandler:
                 data = {
                     "model": self.model,
                     "messages": messages,
-                    "temperature": config.AI_TEMPERATURE,
-                    "max_tokens": config.AI_MAX_TOKENS,
-                    "top_p": 1,
-                    "stream": False
+                    "temperature": 0.95,
+                    "max_tokens": 400,  # Снижен для экономии
+                    "top_p": 0.95
                 }
                 
                 async with session.post(self.api_url, headers=headers, json=data) as response:
@@ -205,26 +205,26 @@ class AIHandler:
                         result = await response.json()
                         ai_response = result["choices"][0]["message"]["content"].strip()
                         
-                        # Удаляем возможные префиксы с именем
+                        # Удаляем префиксы
                         if ai_response.startswith(f"{config.BOT_NAME}:"):
                             ai_response = ai_response[len(config.BOT_NAME)+1:].strip()
                         
-                        logger.info(f"AI response generated successfully")
+                        logger.info(f"OpenRouter response generated successfully")
                         return ai_response
                     else:
                         error_text = await response.text()
-                        logger.error(f"Groq API error {response.status}: {error_text}")
+                        logger.error(f"OpenRouter API error {response.status}: {error_text}")
                         return "Блять, че-то у меня технические проблемы... попробуй позже 😤"
                         
         except Exception as e:
-            logger.error(f"Error getting AI response: {e}")
+            logger.error(f"Error getting OpenRouter response: {e}")
             return "Пиздец, что-то сломалось... дай мне минутку 🤦‍♀️"
     
     async def decide_winner(self, all_participants: List[Dict], 
                            participant_messages: List[Dict], difficulty: str = "hard") -> Optional[Dict]:
-        """AI решает кто победил (в кого влюбилась)"""
+        """AI решает кто победил"""
         try:
-            # Выбираем промпт в зависимости от сложности
+            # Выбираем промпт
             if difficulty == "easy":
                 current_system_prompt = self.prompt_easy
             elif difficulty == "medium":
@@ -232,13 +232,14 @@ class AIHandler:
             else:
                 current_system_prompt = self.prompt_hard
 
-            # Формируем данные об участниках
+            # Формируем данные
             participants_summary = []
             for participant in all_participants:
                 user_id = participant['user_id']
                 messages = [m for m in participant_messages if m['user_id'] == user_id]
                 
-                messages_text = "\n".join([f"- {m['message']}" for m in messages[-10:]])  # Последние 10
+                # Берём только последние 5 сообщений для экономии
+                messages_text = "\n".join([f"- {m['message']}" for m in messages[-5:]])
                 
                 participants_summary.append({
                     'user_id': user_id,
@@ -251,35 +252,21 @@ class AIHandler:
             if not participants_summary:
                 return None
             
-            # Промпт для выбора победителя
-            decision_prompt = f"""Ты {config.BOT_NAME}. Игра закончилась. Тебе нужно решить: влюбилась ли ты в кого-то?
+            decision_prompt = f"""Ты {config.BOT_NAME}. Игра закончилась. Влюбилась ли ты в кого-то?
 
-УЧАСТНИКИ И ИХ СООБЩЕНИЯ:
+УЧАСТНИКИ:
 """
             for p in participants_summary:
-                decision_prompt += f"\n{p['name']} (@{p['username']}) - {p['message_count']} сообщений:\n{p['messages']}\n"
+                decision_prompt += f"\n{p['name']} - {p['message_count']} сообщ:\n{p['messages']}\n"
             
-            decision_prompt += f"""
-ТВОЯ ЗАДАЧА:
-Проанализируй всех участников. Влюбилась ли ты в кого-то из них?
-
-Критерии:
-- Оригинальность и креативность подката
-- Юмор и харизма
-- НЕ шаблонные фразы
-- Сначала познакомился, потом подкатывал
-- Романтика и искренность
-- Уверенность без наглости
-
-Ответь СТРОГО в JSON формате:
-{{
+            decision_prompt += """
+Ответь в JSON (без доп. текста):
+{
     "in_love": true/false,
-    "winner_user_id": 123456789 или null,
-    "winner_name": "Имя" или null,
-    "reason": "Краткая причина почему влюбилась или почему никто не понравился"
-}}
-
-ВАЖНО: Если никто не впечатлил - in_love должен быть false!"""
+    "winner_user_id": число или null,
+    "winner_name": "имя" или null,
+    "reason": "причина"
+}"""
 
             messages = [
                 {"role": "system", "content": current_system_prompt},
@@ -296,7 +283,7 @@ class AIHandler:
                     "model": self.model,
                     "messages": messages,
                     "temperature": 0.7,
-                    "max_tokens": 300
+                    "max_tokens": 250
                 }
                 
                 async with session.post(self.api_url, headers=headers, json=data) as response:
@@ -311,13 +298,13 @@ class AIHandler:
                         if start_idx != -1 and end_idx > start_idx:
                             json_str = ai_response[start_idx:end_idx]
                             decision = json.loads(json_str)
-                            logger.info(f"AI decision: {decision}")
+                            logger.info(f"OpenRouter decision: {decision}")
                             return decision
                         else:
-                            logger.error("No JSON found in AI response")
+                            logger.error("No JSON found in response")
                             return None
                     else:
-                        logger.error(f"Groq API error in decide_winner: {response.status}")
+                        logger.error(f"OpenRouter error in decide_winner: {response.status}")
                         return None
                         
         except Exception as e:
