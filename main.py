@@ -534,7 +534,7 @@ def main():
         logger.error("TELEGRAM_BOT_TOKEN not set!")
         return
     
-    if not config.GROQ_API_KEY:
+    if not config.OPENROUTER_API_KEY:
         logger.error("GROQ_API_KEY not set!")
         return
     
