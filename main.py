@@ -31,6 +31,9 @@ ai = AIHandler()
 # Глобальные переменные для отслеживания игр
 active_games = {}  # {chat_id: {'check_task': task, 'last_check': datetime}}
 
+# Блокировки для чатов, чтобы сообщения обрабатывались по очереди
+chat_locks = {}
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /help - справка в стиле Алисы"""
     help_text = (
@@ -298,43 +301,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_process:
         return
     
-    db.add_participant_message(chat_id, user_id, username, first_name, message_text)
-    
-    conversation_history = db.get_conversation_history(chat_id)
-    participant_messages = db.get_participant_messages(chat_id, user_id)
-    all_participants = db.get_participants(chat_id)
-    
-    # Получаем сложность текущей игры
-    difficulty = db.get_game_difficulty(chat_id)
-    
-    # Получаем ответ от AI
-    user_display_name = f"{first_name}" + (f" (@{username})" if username else "")
-    ai_response = await ai.get_response(
-        message_text,
-        conversation_history,
-        user_display_name,
-        len(participant_messages),
-        all_participants,
-        difficulty
-    )
-    
-    if ai_response.strip() == "ИГНОР":
-        logger.info(f"AI decided to ignore message from {user_display_name} in chat {chat_id}")
-        return
-    
-    db.add_conversation(chat_id, "user", f"{user_display_name}: {message_text}")
-    db.add_conversation(chat_id, "assistant", ai_response)
-    
-    await update.message.reply_text(ai_response)
+    # Создаем или получаем лок для чата
+    if chat_id not in chat_locks:
+        chat_locks[chat_id] = asyncio.Lock()
 
-    # --- МГНОВЕННАЯ ПРОВЕРКА ПОБЕДЫ ПО ОТВЕТУ ---
-    # Проверяем ключевые фразы из промпта ("я в тебя влюбилась")
-    ai_resp_lower = ai_response.lower()
-    if "я в тебя влюбилась" in ai_resp_lower and "хочу быть с тобой" in ai_resp_lower:
+    # Используем лок, чтобы обрабатывать сообщения по очереди в рамках одного чата
+    # Это предотвращает поломку контекста при одновременных запросах
+    async with chat_locks[chat_id]:
+        # Снова проверяем активность игры внутри лока (на случай если она закончилась пока ждали)
+        if not db.is_game_active(chat_id):
+            return
+
+        db.add_participant_message(chat_id, user_id, username, first_name, message_text)
         
-        winner_display = f"{first_name}" + (f" (@{username})" if username else "")
+        conversation_history = db.get_conversation_history(chat_id)
+        participant_messages = db.get_participant_messages(chat_id, user_id)
+        all_participants = db.get_participants(chat_id)
         
-        system_msg = f"""💕 ИГРА ОКОНЧЕНА! 💕
+        # Получаем сложность текущей игры
+        difficulty = db.get_game_difficulty(chat_id)
+        
+        # Получаем ответ от AI
+        user_display_name = f"{first_name}" + (f" (@{username})" if username else "")
+        ai_response = await ai.get_response(
+            message_text,
+            conversation_history,
+            user_display_name,
+            len(participant_messages),
+            all_participants,
+            difficulty
+        )
+        
+        if ai_response.strip() == "ИГНОР":
+            logger.info(f"AI decided to ignore message from {user_display_name} in chat {chat_id}")
+            return
+        
+        db.add_conversation(chat_id, "user", f"{user_display_name}: {message_text}")
+        db.add_conversation(chat_id, "assistant", ai_response)
+        
+        await update.message.reply_text(ai_response)
+
+        # --- МГНОВЕННАЯ ПРОВЕРКА ПОБЕДЫ ПО ОТВЕТУ ---
+        # Проверяем ключевые фразы из промпта ("я в тебя влюбилась")
+        ai_resp_lower = ai_response.lower()
+        if "я в тебя влюбилась" in ai_resp_lower and "хочу быть с тобой" in ai_resp_lower:
+            
+            winner_display = f"{first_name}" + (f" (@{username})" if username else "")
+            
+            system_msg = f"""💕 ИГРА ОКОНЧЕНА! 💕
 
 Всё... я влюбилась. Да, блять, ВЛЮБИЛАСЬ! Не могу поверить сама 😳
 
@@ -346,18 +360,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Чтобы начать новую игру, напишите /start, /alisa или "Алиса приходи"."""
 
-        await context.bot.send_message(chat_id, system_msg)
-        
-        # Завершаем игру в БД
-        db.end_game(chat_id, user_id, winner_display)
-        
-        # Останавливаем фоновую задачу
-        if chat_id in active_games:
-            active_games[chat_id]['check_task'].cancel()
-            del active_games[chat_id]
-        
-        logger.info(f"Instant win triggered by keywords for {winner_display} in chat {chat_id}")
-        return
+            await context.bot.send_message(chat_id, system_msg)
+            
+            # Завершаем игру в БД
+            db.end_game(chat_id, user_id, winner_display)
+            
+            # Останавливаем фоновую задачу
+            if chat_id in active_games:
+                active_games[chat_id]['check_task'].cancel()
+                del active_games[chat_id]
+            
+            logger.info(f"Instant win triggered by keywords for {winner_display} in chat {chat_id}")
+            return
     
     logger.info(f"Processed message from {user_display_name} in chat {chat_id}")
 
@@ -532,10 +546,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not config.TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not set!")
-        return
-    
-    if not config.OPENROUTER_API_KEY:
-        logger.error("GROQ_API_KEY not set!")
         return
     
     infrastructure.start_server()
