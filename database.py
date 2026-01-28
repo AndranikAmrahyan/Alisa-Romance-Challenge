@@ -21,12 +21,13 @@ class Database:
         cursor = conn.cursor()
         
         # Таблица для игровых сессий
-        # Добавлено поле difficulty
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS game_sessions (
                 chat_id INTEGER PRIMARY KEY,
                 is_active INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'waiting', -- waiting, playing, finished
                 difficulty TEXT DEFAULT 'hard',
+                initiator_id INTEGER,
                 started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 ended_at TIMESTAMP,
                 winner_user_id INTEGER,
@@ -34,6 +35,20 @@ class Database:
             )
         ''')
         
+        # Таблица для зарегистрированных участников игры
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS game_participants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER,
+                user_id INTEGER,
+                username TEXT,
+                first_name TEXT,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, user_id),
+                FOREIGN KEY (chat_id) REFERENCES game_sessions(chat_id)
+            )
+        ''')
+
         # Таблица для сообщений участников
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS participant_messages (
@@ -60,67 +75,136 @@ class Database:
             )
         ''')
         
-        # Миграция: проверяем, есть ли колонка difficulty, если нет - добавляем (для старых БД)
+        # Миграции для старых баз данных
         try:
-            cursor.execute('SELECT difficulty FROM game_sessions LIMIT 1')
-        except sqlite3.OperationalError:
             cursor.execute('ALTER TABLE game_sessions ADD COLUMN difficulty TEXT DEFAULT "hard"')
-            logger.info("Added 'difficulty' column to game_sessions")
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute('ALTER TABLE game_sessions ADD COLUMN status TEXT DEFAULT "playing"')
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute('ALTER TABLE game_sessions ADD COLUMN initiator_id INTEGER')
+        except sqlite3.OperationalError:
+            pass
         
         conn.commit()
         conn.close()
     
-    def start_game(self, chat_id: int, difficulty: str = "hard"):
-        """Начать новую игру с указанной сложностью"""
+    def init_game_session(self, chat_id: int, initiator_id: int, difficulty: str = "hard"):
+        """Создать сессию игры в режиме ожидания (Лобби)"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # Завершить предыдущую игру если есть
+        # Завершить предыдущую
         cursor.execute('UPDATE game_sessions SET is_active = 0, ended_at = CURRENT_TIMESTAMP WHERE chat_id = ? AND is_active = 1', (chat_id,))
         
-        # Удалить старые данные
+        # Очистить старые данные
         cursor.execute('DELETE FROM participant_messages WHERE chat_id = ?', (chat_id,))
         cursor.execute('DELETE FROM conversation_history WHERE chat_id = ?', (chat_id,))
+        cursor.execute('DELETE FROM game_participants WHERE chat_id = ?', (chat_id,))
         
-        # Проверяем существует ли запись для этого чата
+        # Создаем или обновляем сессию
         cursor.execute('SELECT chat_id FROM game_sessions WHERE chat_id = ?', (chat_id,))
         exists = cursor.fetchone()
         
         if exists:
-            # Обновляем существующую запись
             cursor.execute('''
                 UPDATE game_sessions 
-                SET is_active = 1, difficulty = ?, started_at = CURRENT_TIMESTAMP, ended_at = NULL, winner_user_id = NULL, winner_name = NULL
+                SET is_active = 1, status = 'waiting', difficulty = ?, initiator_id = ?, 
+                    started_at = CURRENT_TIMESTAMP, ended_at = NULL, winner_user_id = NULL, winner_name = NULL
                 WHERE chat_id = ?
-            ''', (difficulty, chat_id,))
+            ''', (difficulty, initiator_id, chat_id,))
         else:
-            # Создаем новую запись
-            cursor.execute('INSERT INTO game_sessions (chat_id, is_active, difficulty) VALUES (?, 1, ?)', (chat_id, difficulty))
+            cursor.execute('''
+                INSERT INTO game_sessions (chat_id, is_active, status, difficulty, initiator_id) 
+                VALUES (?, 1, 'waiting', ?, ?)
+            ''', (chat_id, difficulty, initiator_id))
         
         conn.commit()
         conn.close()
-        logger.info(f"Started new game for chat {chat_id} with difficulty {difficulty}")
-    
-    def is_game_active(self, chat_id: int) -> bool:
-        """Проверить активна ли игра"""
+        logger.info(f"Initialized lobby for chat {chat_id}, difficulty {difficulty}")
+
+    def add_participant(self, chat_id: int, user_id: int, username: str, first_name: str) -> bool:
+        """Добавить участника в игру. Возвращает True если добавлен, False если уже был."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT is_active FROM game_sessions WHERE chat_id = ? ORDER BY started_at DESC LIMIT 1', (chat_id,))
+        try:
+            cursor.execute('''
+                INSERT INTO game_participants (chat_id, user_id, username, first_name)
+                VALUES (?, ?, ?, ?)
+            ''', (chat_id, user_id, username or "", first_name or "Аноним"))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+        finally:
+            conn.close()
+
+    def get_registered_participants(self, chat_id: int) -> List[Dict]:
+        """Получить список зарегистрированных участников"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, username, first_name FROM game_participants WHERE chat_id = ?', (chat_id,))
+        results = cursor.fetchall()
+        conn.close()
+        return [{'user_id': r[0], 'username': r[1], 'first_name': r[2]} for r in results]
+
+    def is_participant(self, chat_id: int, user_id: int) -> bool:
+        """Проверить, является ли пользователь участником"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT 1 FROM game_participants WHERE chat_id = ? AND user_id = ?', (chat_id, user_id))
         result = cursor.fetchone()
         conn.close()
-        return result and result[0] == 1
+        return bool(result)
+
+    def set_game_started(self, chat_id: int):
+        """Перевести игру в статус 'playing'"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE game_sessions SET status = 'playing', started_at = CURRENT_TIMESTAMP WHERE chat_id = ? AND is_active = 1", (chat_id,))
+        conn.commit()
+        conn.close()
+
+    def get_game_info(self, chat_id: int) -> Optional[Dict]:
+        """Получить информацию о текущей игре"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT status, difficulty, initiator_id, is_active 
+            FROM game_sessions 
+            WHERE chat_id = ? AND is_active = 1
+        ''', (chat_id,))
+        result = cursor.fetchone()
+        conn.close()
+        if result:
+            return {
+                'status': result[0],
+                'difficulty': result[1],
+                'initiator_id': result[2],
+                'is_active': result[3]
+            }
+        return None
+
+    def is_game_active(self, chat_id: int) -> bool:
+        """Проверить активна ли игра (в любом статусе)"""
+        info = self.get_game_info(chat_id)
+        return info is not None and info['is_active'] == 1
+
+    def is_game_playing(self, chat_id: int) -> bool:
+        """Проверить, идет ли сам процесс игры (статус playing)"""
+        info = self.get_game_info(chat_id)
+        return info is not None and info['is_active'] == 1 and info['status'] == 'playing'
 
     def get_game_difficulty(self, chat_id: int) -> str:
-        """Получить сложность текущей игры"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT difficulty FROM game_sessions WHERE chat_id = ? AND is_active = 1', (chat_id,))
-        result = cursor.fetchone()
-        conn.close()
-        return result[0] if result else "hard"
+        info = self.get_game_info(chat_id)
+        return info['difficulty'] if info else "hard"
     
     def end_game(self, chat_id: int, winner_user_id: Optional[int] = None, winner_name: Optional[str] = None):
-        """Завершить игру"""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
@@ -166,7 +250,8 @@ class Database:
             for r in results
         ]
     
-    def get_participants(self, chat_id: int) -> List[Dict]:
+    def get_participants_stats(self, chat_id: int) -> List[Dict]:
+        """Статистика сообщений для промпта (только активные сообщения)"""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
