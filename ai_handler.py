@@ -111,12 +111,6 @@ class AIHandler:
 - Когда влюбишься - скажи прямо: "Всё, {{имя}}, я в тебя влюбилась. Хочу быть с тобой ❤️"
 """
 
-# STEXIC SKSEL USHADIR POXELY - USERNAME PAHELOV PROMPMTERI MEJ,
-# "Блять, че-то у меня технические проблемы... попробуй позже 😤" PAHELOV,
-# PROMPTERI POPOXUTYUNNERY USHADIR NAYI - SIRAHARVELUNY VOR PITI VOROSHI NUYN PROMPTERY,
-# JSON FORMATOV PATASXANELU PROMPTY NUYNy, u vor chsiraharvelu depqum anpayman false - nuyn texty
-# Daje karoxa sranic nerqev bolor promptery nuyny toxnenq.
-
     async def _make_request(self, messages: List[Dict], temp: float, provider: str) -> tuple[int, Dict]:
         """Внутренний метод для запроса"""
         if provider == "groq":
