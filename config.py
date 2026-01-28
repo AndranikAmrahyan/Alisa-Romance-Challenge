@@ -40,13 +40,16 @@ START_TRIGGERS = [
     "алиса выходи"
 ]
 
+# Настройки игры
+MAX_PLAYERS_PER_GAME = 4  # Максимальное количество игроков в одной игре
+
 # Тайминги игры (в секундах)
-MIN_GAME_DURATION = 300   # 5 минут (чтобы AI успел узнать контекст)
+MIN_GAME_DURATION = 60   # 1 минут (чтобы AI успел узнать контекст)
 
 # MAX_GAME_DURATION в зависимости от сложности
-MAX_GAME_DURATION_HARD = 3600    # 1 час для сложного режима
-MAX_GAME_DURATION_MEDIUM = 1800  # 30 минут для среднего режима
-MAX_GAME_DURATION_EASY = 900     # 15 минут для легкого режима
+MAX_GAME_DURATION_HARD = 1800    # 30 минут для сложного режима
+MAX_GAME_DURATION_MEDIUM = 1080  # 18 минут для среднего режима
+MAX_GAME_DURATION_EASY = 600     # 10 минут для легкого режима
 
 CHECK_INTERVAL = 300      # Проверка каждые 5 минут
 
